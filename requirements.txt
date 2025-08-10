@@ -1,0 +1,9 @@
+python-telegram-bot>=20.7
+anthropic>=0.3.0
+python-dotenv>=1.0.0
+gspread>=5.7.0
+google-auth>=2.16.0
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+pytz>=2023.3
