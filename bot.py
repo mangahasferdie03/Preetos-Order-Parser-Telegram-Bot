@@ -57,6 +57,8 @@ I can help you process chickpea chips orders from Facebook Messenger messages.
 /start - Show this welcome message
 /help - Show help information
 /status - Check bot status
+/debug - Show Railway debug info
+/testsheets - Test Google Sheets connection
 
 Just send me a customer message to get started! 🚀
         """
@@ -344,26 +346,117 @@ Need more help? Contact your administrator.
             await self._show_details(query, context)
     
     async def _confirm_order(self, query, context):
-        """Confirm and save order to Google Sheets."""
+        """Confirm and save order to Google Sheets with detailed debugging."""
         pending_order = context.user_data.get('pending_order')
         
         if not pending_order:
             await query.edit_message_text("❌ No pending order found. Please try again.")
             return
         
-        # Show processing message
-        await query.edit_message_text("🔄 Saving order to Google Sheets...")
+        # Show initial processing message
+        await query.edit_message_text("🔄 Step 1/5: Starting Google Sheets save process...")
         
         try:
-            # Connect to Google Sheets
-            if not self.sheets.connect():
-                error_detail = getattr(self.sheets, 'last_error', 'Unknown error')
-                raise Exception(f"Could not connect to Google Sheets: {error_detail}")
+            # Step 1: Environment Check
+            await query.edit_message_text("🔍 Step 1/5: Checking Railway environment...")
             
-            # Get next available row
+            import os
+            from datetime import datetime, timezone
+            import json
+            import base64
+            
+            # Check environment variables
+            debug_info = []
+            debug_info.append("🔍 **RAILWAY DEBUG INFO:**")
+            debug_info.append(f"📊 GOOGLE_CREDENTIALS_B64: {'✅' if os.getenv('GOOGLE_CREDENTIALS_B64') else '❌'}")
+            debug_info.append(f"📋 GOOGLE_SPREADSHEET_ID: {'✅' if os.getenv('GOOGLE_SPREADSHEET_ID') else '❌'}")
+            
+            if os.getenv('GOOGLE_CREDENTIALS_B64'):
+                creds_len = len(os.getenv('GOOGLE_CREDENTIALS_B64'))
+                debug_info.append(f"📏 Credentials length: {creds_len} chars")
+                
+                # Test decode
+                try:
+                    decoded = base64.b64decode(os.getenv('GOOGLE_CREDENTIALS_B64')).decode('utf-8')
+                    parsed = json.loads(decoded)
+                    debug_info.append(f"✅ Credentials decode: OK")
+                    debug_info.append(f"📧 Service account: {parsed.get('client_email', 'NOT_FOUND')[:50]}...")
+                    debug_info.append(f"🏢 Project: {parsed.get('project_id', 'NOT_FOUND')}")
+                except Exception as decode_err:
+                    debug_info.append(f"❌ Credentials decode: {decode_err}")
+            
+            # Check system time
+            utc_now = datetime.now(timezone.utc)
+            unix_ts = int(utc_now.timestamp())
+            debug_info.append(f"🕐 Railway UTC time: {utc_now.strftime('%Y-%m-%d %H:%M:%S')}")
+            debug_info.append(f"⏰ Unix timestamp: {unix_ts}")
+            
+            # Time sanity check
+            if unix_ts < 1735689600:  # 2025-01-01
+                debug_info.append("⚠️ WARNING: Clock appears to be before 2025!")
+            elif unix_ts > 1767225600:  # 2026-01-01
+                debug_info.append("⚠️ WARNING: Clock appears to be after 2025!")
+            else:
+                debug_info.append("✅ Clock appears reasonable")
+            
+            # Send debug info
+            debug_msg = "\n".join(debug_info[:15])  # Limit message length
+            await query.edit_message_text(debug_msg, parse_mode='Markdown')
+            
+            # Wait a moment then continue
+            import asyncio
+            await asyncio.sleep(2)
+            
+            # Step 2: Connection Test
+            await query.edit_message_text("🔗 Step 2/5: Testing Google Sheets connection...")
+            
+            # Try connection with detailed error capture
+            connection_success = False
+            connection_error = "Unknown error"
+            
+            try:
+                connection_success = self.sheets.connect()
+                if not connection_success:
+                    connection_error = getattr(self.sheets, 'last_error', 'No error details available')
+            except Exception as conn_err:
+                connection_error = str(conn_err)
+            
+            if not connection_success:
+                # Show detailed connection failure
+                error_details = []
+                error_details.append("❌ **CONNECTION FAILED**")
+                error_details.append(f"Error: {connection_error}")
+                
+                # Check if it's JWT signature error
+                if "Invalid JWT Signature" in connection_error:
+                    error_details.append("")
+                    error_details.append("🔍 **JWT SIGNATURE ERROR ANALYSIS:**")
+                    error_details.append("• This usually means:")
+                    error_details.append("  - Railway clock is out of sync")
+                    error_details.append("  - Service account key is invalid")
+                    error_details.append("  - Private key format issue")
+                    error_details.append("")
+                    error_details.append("💡 **SOLUTIONS TO TRY:**")
+                    error_details.append("1. Regenerate service account key")
+                    error_details.append("2. Check Google Cloud Console")
+                    error_details.append("3. Verify service account permissions")
+                
+                error_msg = "\n".join(error_details)
+                await query.edit_message_text(error_msg, parse_mode='Markdown')
+                return
+            
+            await query.edit_message_text("✅ Step 2/5: Google Sheets connection successful!")
+            await asyncio.sleep(1)
+            
+            # Step 3: Find Next Row
+            await query.edit_message_text("📊 Step 3/5: Finding next available row...")
             next_row = self.sheets.find_next_available_row()
             
-            # Update the sheet
+            await query.edit_message_text(f"✅ Step 3/5: Next row found: {next_row}")
+            await asyncio.sleep(1)
+            
+            # Step 4: Save Data
+            await query.edit_message_text(f"💾 Step 4/5: Saving order to row {next_row}...")
             success = self.sheets.update_order_row(pending_order, next_row)
             
             if success:
@@ -466,6 +559,109 @@ Need more help? Contact your administrator.
         
         await query.edit_message_text(details, reply_markup=reply_markup, parse_mode='Markdown')
     
+    async def debug_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show detailed Railway debug information."""
+        debug_info = ["🔍 **RAILWAY DEBUG INFO:**"]
+        
+        import os
+        from datetime import datetime, timezone
+        import json
+        import base64
+        
+        # Environment variables check
+        debug_info.append(f"📊 GOOGLE_CREDENTIALS_B64: {'✅' if os.getenv('GOOGLE_CREDENTIALS_B64') else '❌'}")
+        debug_info.append(f"📋 GOOGLE_SPREADSHEET_ID: {'✅' if os.getenv('GOOGLE_SPREADSHEET_ID') else '❌'}")
+        debug_info.append(f"🤖 TELEGRAM_BOT_TOKEN: {'✅' if os.getenv('TELEGRAM_BOT_TOKEN') else '❌'}")
+        debug_info.append(f"🔑 CLAUDE_API_KEY: {'✅' if os.getenv('CLAUDE_API_KEY') else '❌'}")
+        
+        if os.getenv('GOOGLE_CREDENTIALS_B64'):
+            creds_len = len(os.getenv('GOOGLE_CREDENTIALS_B64'))
+            debug_info.append(f"📏 Credentials length: {creds_len} chars")
+            
+            # Test decode
+            try:
+                decoded = base64.b64decode(os.getenv('GOOGLE_CREDENTIALS_B64')).decode('utf-8')
+                parsed = json.loads(decoded)
+                debug_info.append(f"✅ Credentials decode: OK")
+                debug_info.append(f"📧 Service account: {parsed.get('client_email', 'NOT_FOUND')[:50]}...")
+                debug_info.append(f"🏢 Project: {parsed.get('project_id', 'NOT_FOUND')}")
+            except Exception as decode_err:
+                debug_info.append(f"❌ Credentials decode: {decode_err}")
+        
+        # System time
+        utc_now = datetime.now(timezone.utc)
+        unix_ts = int(utc_now.timestamp())
+        debug_info.append(f"🕐 Railway UTC time: {utc_now.strftime('%Y-%m-%d %H:%M:%S')}")
+        debug_info.append(f"⏰ Unix timestamp: {unix_ts}")
+        
+        # Time sanity check
+        if unix_ts < 1735689600:  # 2025-01-01
+            debug_info.append("⚠️ WARNING: Clock appears to be before 2025!")
+        elif unix_ts > 1767225600:  # 2026-01-01
+            debug_info.append("⚠️ WARNING: Clock appears to be after 2025!")
+        else:
+            debug_info.append("✅ Clock appears reasonable")
+        
+        # Railway specific info
+        debug_info.append(f"🚂 Railway Environment: {os.getenv('RAILWAY_ENVIRONMENT', 'Not detected')}")
+        debug_info.append(f"🚂 Railway Service: {os.getenv('RAILWAY_SERVICE_ID', 'Not detected')}")
+        
+        debug_msg = "\n".join(debug_info[:20])  # Limit message length
+        await update.message.reply_text(debug_msg, parse_mode='Markdown')
+    
+    async def test_sheets_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Test Google Sheets connection manually."""
+        await update.message.reply_text("🔄 Testing Google Sheets connection...")
+        
+        try:
+            # Test connection
+            connection_success = False
+            connection_error = "Unknown error"
+            
+            try:
+                connection_success = self.sheets.connect()
+                if not connection_success:
+                    connection_error = getattr(self.sheets, 'last_error', 'No error details available')
+            except Exception as conn_err:
+                connection_error = str(conn_err)
+            
+            if connection_success:
+                next_row = self.sheets.find_next_available_row()
+                
+                await update.message.reply_text(
+                    f"✅ **Google Sheets Test Successful!**\n\n"
+                    f"📊 Connected to spreadsheet\n"
+                    f"📋 Accessed ORDER worksheet\n"
+                    f"📈 Next available row: {next_row}",
+                    parse_mode='Markdown'
+                )
+            else:
+                # Show detailed connection failure
+                error_details = []
+                error_details.append("❌ **CONNECTION TEST FAILED**")
+                error_details.append(f"Error: {connection_error}")
+                
+                # Check if it's JWT signature error
+                if "Invalid JWT Signature" in connection_error:
+                    error_details.append("")
+                    error_details.append("🔍 **JWT SIGNATURE ERROR DETECTED:**")
+                    error_details.append("• This typically means:")
+                    error_details.append("  - Railway clock is out of sync with Google")
+                    error_details.append("  - Service account key needs regeneration")
+                    error_details.append("  - Private key format corruption")
+                    error_details.append("")
+                    error_details.append("💡 **RECOMMENDED ACTIONS:**")
+                    error_details.append("1. Generate new service account key")
+                    error_details.append("2. Check Google Cloud Console permissions")
+                    error_details.append("3. Verify system time synchronization")
+                
+                error_msg = "\n".join(error_details)
+                await update.message.reply_text(error_msg, parse_mode='Markdown')
+                
+        except Exception as e:
+            logger.error(f"Test error: {str(e)}")
+            await update.message.reply_text(f"❌ Test failed with error: {str(e)}")
+    
     def run(self):
         """Start the bot."""
         # Create the Application
@@ -475,6 +671,8 @@ Need more help? Contact your administrator.
         application.add_handler(CommandHandler("start", self.start))
         application.add_handler(CommandHandler("help", self.help_command))
         application.add_handler(CommandHandler("status", self.status))
+        application.add_handler(CommandHandler("debug", self.debug_command))
+        application.add_handler(CommandHandler("testsheets", self.test_sheets_command))
         
         # Handle all text messages
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.process_message))
