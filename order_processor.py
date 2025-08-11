@@ -546,12 +546,14 @@ class GoogleSheetsIntegration:
         self.spreadsheet = None
         self.worksheet = None
         self.is_railway = os.getenv('GOOGLE_CREDENTIALS_B64') is not None
+        self.last_error = None
         
     def connect(self, worksheet_name: str = "ORDER") -> bool:
         """Connect to Google Sheets API and open the specified spreadsheet"""
         try:
             if not self.spreadsheet_id:
-                raise Exception("Missing spreadsheet ID")
+                self.last_error = "Missing spreadsheet ID"
+                raise Exception(self.last_error)
             
             # Handle Railway vs local environment
             if self.is_railway:
@@ -559,18 +561,28 @@ class GoogleSheetsIntegration:
                 import base64
                 credentials_b64 = os.getenv('GOOGLE_CREDENTIALS_B64')
                 if not credentials_b64:
-                    raise Exception("GOOGLE_CREDENTIALS_B64 environment variable is required for Railway")
+                    self.last_error = "GOOGLE_CREDENTIALS_B64 environment variable is required for Railway"
+                    raise Exception(self.last_error)
                 
                 # Decode base64 credentials
-                credentials_json = base64.b64decode(credentials_b64).decode('utf-8')
-                creds_data = json.loads(credentials_json)
-                print("Using base64 encoded credentials from Railway")
+                try:
+                    credentials_json = base64.b64decode(credentials_b64).decode('utf-8')
+                    creds_data = json.loads(credentials_json)
+                    print("Using base64 encoded credentials from Railway")
+                except Exception as decode_error:
+                    self.last_error = f"Failed to decode credentials: {decode_error}"
+                    raise Exception(self.last_error)
             else:
                 # Local environment - use JSON string or file
                 if self.credentials_json:
-                    creds_data = json.loads(self.credentials_json)
+                    try:
+                        creds_data = json.loads(self.credentials_json)
+                    except Exception as json_error:
+                        self.last_error = f"Invalid JSON credentials: {json_error}"
+                        raise Exception(self.last_error)
                 else:
-                    raise Exception("Missing Google credentials")
+                    self.last_error = "Missing Google credentials"
+                    raise Exception(self.last_error)
             
             # Set up credentials with required scopes
             scopes = [
@@ -578,17 +590,28 @@ class GoogleSheetsIntegration:
                 'https://www.googleapis.com/auth/drive'
             ]
             
-            credentials = Credentials.from_service_account_info(creds_data, scopes=scopes)
-            self.gc = gspread.authorize(credentials)
+            try:
+                credentials = Credentials.from_service_account_info(creds_data, scopes=scopes)
+                self.gc = gspread.authorize(credentials)
+            except Exception as auth_error:
+                self.last_error = f"Google auth failed: {auth_error}"
+                raise Exception(self.last_error)
             
             # Open the spreadsheet and worksheet
-            self.spreadsheet = self.gc.open_by_key(self.spreadsheet_id)
-            self.worksheet = self.spreadsheet.worksheet(worksheet_name)
+            try:
+                self.spreadsheet = self.gc.open_by_key(self.spreadsheet_id)
+                self.worksheet = self.spreadsheet.worksheet(worksheet_name)
+            except Exception as sheet_error:
+                self.last_error = f"Failed to open spreadsheet/worksheet: {sheet_error}"
+                raise Exception(self.last_error)
             
+            self.last_error = None
             return True
             
         except Exception as e:
-            print(f"Failed to connect to Google Sheets: {str(e)}")
+            error_msg = f"Failed to connect to Google Sheets: {str(e)}"
+            print(error_msg)
+            self.last_error = str(e)
             return False
     
     def find_next_available_row(self) -> int:

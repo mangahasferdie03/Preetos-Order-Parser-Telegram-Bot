@@ -357,7 +357,8 @@ Need more help? Contact your administrator.
         try:
             # Connect to Google Sheets
             if not self.sheets.connect():
-                raise Exception("Could not connect to Google Sheets")
+                error_detail = getattr(self.sheets, 'last_error', 'Unknown error')
+                raise Exception(f"Could not connect to Google Sheets: {error_detail}")
             
             # Get next available row
             next_row = self.sheets.find_next_available_row()
